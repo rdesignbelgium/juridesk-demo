@@ -138,3 +138,6 @@ td.sans{font-family:var(--font)}
   .main{padding:22px 20px 60px}
   .doc{padding:28px}
 }
+
+.doc h2{font-size:15px;font-weight:600;margin:10px 0 2px;color:#1B1F2A}
+.doc .sig+.sig{margin-top:14px}
