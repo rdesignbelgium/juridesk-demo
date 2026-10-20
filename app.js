@@ -70,9 +70,27 @@
     try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && Array.isArray(s.dossiers) && s.dossiers.length) return s; } catch (e) { /* ignore */ }
     return { dossiers: JSON.parse(JSON.stringify(SEED)) };
   }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify({ dossiers: DOSSIERS })); } catch (e) { /* ignore */ } }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify({ dossiers: DOSSIERS, custom: CUSTOM })); } catch (e) { /* ignore */ } }
   const store = load();
   const DOSSIERS = store.dossiers;
+  const CUSTOM = Array.isArray(store.custom) ? store.custom : [{
+    id: 'c_' + Date.now(), nom: 'Exemple — Rappel de paiement amiable', famille: 'Mes modèles', cible: 'B2B / B2C',
+    texte: `{{cabinet}}\n{{cabinet.adresse}}\n\n{{adverse.nom}}\n{{adverse.adresse}}\n\n{{lieu}}, le {{date}}\n\nObjet : rappel — {{dossier.titre}}\n\nMadame, Monsieur,\n\nSauf erreur de notre part, le montant de {{principal}} relatif au dossier {{dossier.id}} reste impayé à ce jour.\n\nNous vous invitons à régulariser la situation dans les {{delai}} jours, sur le compte {{iban}}. Passé ce délai, nous serons contraints d'entamer la procédure de recouvrement, avec les frais et intérêts qui s'y rapportent ({{total}} à ce jour).\n\nNous restons à votre disposition pour toute question.\n\n{{signataire}}\nAvocat au barreau de {{barreau}}`
+  }];
+  const allModeles = () => MODELES.concat(CUSTOM);
+  const findModele = id => allModeles().find(m => m.id === id) || MODELES[0];
+
+  // Variables disponibles dans les modèles personnalisés
+  const VARS = [
+    ['client.nom', 'Nom du client'], ['client.bce', 'BCE du client'], ['client.adresse', 'Adresse du client'],
+    ['adverse.nom', 'Nom de la partie adverse'], ['adverse.bce', 'BCE de la partie adverse'], ['adverse.adresse', 'Adresse de la partie adverse'],
+    ['dossier.id', 'Référence du dossier'], ['dossier.titre', 'Intitulé du dossier'], ['date', 'Date du jour (en toutes lettres)'],
+    ['principal', 'Principal dû (factures)'], ['total', 'Total réclamé (calculateur)'], ['delai', 'Délai de paiement (jours)'],
+    ['signataire', 'Signataire'], ['barreau', 'Barreau'], ['cabinet', 'Nom du cabinet'], ['cabinet.adresse', 'Adresse du cabinet'], ['lieu', 'Lieu de signature']
+  ];
+  const VAR_RE = /\{\{\s*([a-zA-Z0-9_.\-]+)\s*\}\}/g;
+  const customFields = m => { const known = new Set(VARS.map(v => v[0])); const out = []; let x; VAR_RE.lastIndex = 0; while ((x = VAR_RE.exec(m.texte || ''))) { if (!known.has(x[1]) && !out.includes(x[1])) out.push(x[1]); } return out; };
+  const fieldLabel = k => k.replace(/[_.-]+/g, ' ').replace(/^\w/, ch => ch.toUpperCase());
 
   // ---------- Utilitaires ----------
   const $ = (sel, root) => (root || document).querySelector(sel);
@@ -252,12 +270,21 @@
     const a = state.atelier, d = currentDossier(), c = calcul(d, state.calc), p = a.p;
     const steps = ['Modèle', 'Parties', 'Détails', 'Clauses', 'Relecture & envoi'];
     const chips = steps.map((s, i) => `<button type="button" class="chip mono ${a.step === i + 1 ? 'on' : a.step > i + 1 ? 'done' : ''}" data-step="${i + 1}">${i + 1} · ${s}</button>`).join('');
-    const modeles = MODELES.map(m => `<label class="check"><input type="radio" name="modele" value="${m.id}" ${a.modele === m.id ? 'checked' : ''}><span><span class="t">${esc(m.nom)}</span><span class="d">${m.famille} · ${m.cible}</span></span></label>`).join('');
+    const modeles = allModeles().map(m => `<label class="check"><input type="radio" name="modele" value="${m.id}" ${a.modele === m.id ? 'checked' : ''}><span><span class="t">${esc(m.nom)}</span><span class="d">${esc(m.famille)} · ${esc(m.cible)}${m.texte ? ' · <span style="color:var(--accent)">modèle du cabinet</span>' : ''}</span></span></label>`).join('') + `<a class="btn ghost" href="#/modeles">Gérer mes modèles →</a>`;
     const dossiers = DOSSIERS.map(x => `<option value="${x.id}" ${x.id === d.id ? 'selected' : ''}>${x.id} — ${esc(x.titre)}</option>`).join('');
     const num = (id, label, val, unit) => `<div class="field"><label for="${id}">${label}${unit ? ' (' + unit + ')' : ''}</label><input id="${id}" data-p="${id.replace('p_', '')}" class="input mono" type="number" min="0" value="${val}"></div>`;
     const txt = (id, label, val) => `<div class="field"><label for="${id}">${label}</label><textarea id="${id}" data-p="${id.replace('p_', '')}" class="input">${esc(val)}</textarea></div>`;
 
     let details, clauses;
+    const cm = CUSTOM.find(m => m.id === a.modele);
+    if (cm) {
+      const fields = customFields(cm);
+      a.custom = a.custom || {};
+      details = `<div class="fields-2"><div class="field"><label for="delai">Délai de paiement (jours)</label><input id="delai" class="input mono" type="number" min="1" value="${a.delai}"></div><div class="field"><label for="p_lieu">Lieu</label><input id="p_lieu" data-p="lieu" class="input" value="${esc(p.lieu || a.barreau)}"></div></div>` +
+        (fields.length ? `<h2 style="font-size:14px">Champs propres au modèle</h2><div class="fields-2">${fields.map(k => `<div class="field"><label for="cf_${k}">${esc(fieldLabel(k))}</label><input id="cf_${k}" data-cf="${esc(k)}" class="input" value="${esc(a.custom[k] || '')}"></div>`).join('')}</div>` : '') +
+        `<div class="assistant"><strong>Assistant Juridesk</strong> — Les variables du dossier (${esc(cm.nom)}) sont remplies automatiquement. ${fields.length ? 'Les champs ci-dessus correspondent aux variables propres à votre modèle.' : ''}</div>`;
+      clauses = `<div class="assistant"><strong>Assistant Juridesk</strong> — Les clauses optionnelles ne s'appliquent pas aux modèles importés : le texte est le vôtre. Ajoutez des variables <span class="mono">{{…}}</span> dans le modèle pour rendre des passages dynamiques.</div>`;
+    } else
     switch (a.modele) {
       case 'presta':
         details = `<div class="fields-2">${num('p_honoraires', 'Honoraires', p.honoraires, '€ HTVA')}${num('p_duree', 'Durée du contrat', p.duree, 'mois')}${num('p_paiement', 'Délai de paiement', p.paiement, 'jours')}</div>${txt('p_objet', 'Objet de la prestation', p.objet)}`;
@@ -327,7 +354,7 @@
         <button type="button" class="btn primary" id="next" ${a.step === 5 ? 'disabled' : ''}>Suivant →</button>
       </div>`;
 
-    return pageHead(`Atelier · ${esc(MODELES.find(m => m.id === a.modele).nom)} · ${d.id}`, 'Atelier de rédaction',
+    return pageHead(`Atelier · ${esc(findModele(a.modele).nom)} · ${d.id}`, 'Atelier de rédaction',
       `<button type="button" class="btn" id="langToggle">${a.lang === 'fr' ? 'Version NL' : 'Version FR'}</button><button type="button" class="btn" id="exportBtn">Exporter en PDF</button><a class="btn" href="#/dossier/${d.id}">Retour au dossier</a>`) +
       `<div class="chips">${chips}</div>
       <div class="grid-wide">
@@ -346,6 +373,22 @@
     const C = esc(d.client.nom), A = esc(d.adverse.nom);
     const bce = x => x && x !== '—' ? ` (BCE ${esc(x)})` : '';
     const nlNote = nl && a.modele !== 'med' ? `<p><mark>Version néerlandaise non disponible pour ce modèle dans la démo — affichage de la version française.</mark></p>` : '';
+
+    const cm = CUSTOM.find(m => m.id === a.modele);
+    if (cm) {
+      const vals = {
+        'client.nom': d.client.nom, 'client.bce': d.client.bce, 'client.adresse': d.client.adresse,
+        'adverse.nom': d.adverse.nom, 'adverse.bce': d.adverse.bce, 'adverse.adresse': d.adverse.adresse,
+        'dossier.id': d.id, 'dossier.titre': d.titre, date: longDate(today), principal: eur(c.principal), total: eur(c.total), delai: a.delai,
+        signataire: a.signataire, barreau: a.barreau, cabinet: a.cabinet, 'cabinet.adresse': a.adresseCab, lieu: p.lieu || a.barreau
+      };
+      const rendered = esc(cm.texte).replace(VAR_RE, (m0, k) => {
+        if (k in vals) return `<mark>${esc(vals[k])}</mark>`;
+        const v = (a.custom || {})[k];
+        return v ? `<mark>${esc(v)}</mark>` : `<mark style="background:#FFE9B3">[${esc(fieldLabel(k).toUpperCase())}]</mark>`;
+      });
+      return `<div style="white-space:pre-wrap">${rendered}</div>`;
+    }
 
     if (a.modele === 'med') {
       const total = eur(c.total), princ = eur(c.principal);
@@ -563,6 +606,32 @@ ${a.plan ? `<h2>Article 5 — Confidentialité</h2><p><mark>Les parties s'interd
     };
   }
 
+  // ---------- Mes modèles ----------
+  function viewModeles(id) {
+    const m = CUSTOM.find(x => x.id === id);
+    const list = CUSTOM.map(x => `<div class="row ${m && m.id === x.id ? 'on' : ''}" style="${m && m.id === x.id ? 'border-color:var(--accent)' : ''}"><span class="dot"></span><a href="#/modeles/${x.id}" style="color:inherit;text-decoration:none;flex:1;min-width:0">${esc(x.nom)}</a><span class="right">${customFields(x).length} champ(s)</span></div>`).join('') || `<div class="row"><span class="dot muted"></span>Aucun modèle pour l'instant<span class="right">—</span></div>`;
+    const vars = VARS.map(([k, l]) => `<button type="button" class="chip mono" data-var="${k}" title="${esc(l)}">{{${k}}}</button>`).join('');
+    const editor = `
+      <section class="card">
+        <h2>${m ? 'Modifier le modèle' : 'Nouveau modèle'}</h2>
+        <div class="fields-2">
+          <div class="field"><label for="m_nom">Nom du modèle</label><input id="m_nom" class="input" value="${esc(m ? m.nom : '')}" placeholder="Ex. Mise en demeure — version cabinet"></div>
+          <div class="field"><label for="m_famille">Famille</label><input id="m_famille" class="input" value="${esc(m ? m.famille : 'Mes modèles')}"></div>
+          <div class="field"><label for="m_cible">Cible</label><select id="m_cible" class="input">${['B2B / B2C', 'B2B', 'B2C'].map(x => `<option ${m && m.cible === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+        </div>
+        <div class="field"><label for="m_file">Importer un fichier (.docx, .txt, .md)</label><input id="m_file" class="input" type="file" accept=".docx,.txt,.md,text/plain"><div class="hint">Le texte du fichier est repris dans l'éditeur ci-dessous ; remplacez ensuite les passages variables par des balises.</div></div>
+        <div class="field"><label for="m_texte">Texte du modèle</label><textarea id="m_texte" class="input" style="min-height:360px;font-family:var(--serif);font-size:14px;line-height:1.6">${esc(m ? m.texte : '')}</textarea></div>
+        <div><div class="kicker" style="margin-bottom:8px">Variables disponibles — cliquer pour insérer</div><div class="chips">${vars}</div><div class="hint" style="margin-top:8px">Toute autre balise, par ex. <span class="mono">{{numero_police}}</span>, devient automatiquement un champ à remplir dans l'atelier.</div></div>
+        <div class="wizard-nav">
+          ${m ? '<button type="button" class="btn ghost" id="m_del">Supprimer</button>' : ''}
+          <button type="button" class="btn primary" id="m_save">${m ? 'Enregistrer' : 'Créer le modèle'}</button>
+        </div>
+        <div id="m_msg" class="hint"></div>
+      </section>`;
+    return pageHead('Mes modèles · ' + CUSTOM.length + ' modèle(s)', 'Modèles du cabinet', `<a class="btn" href="#/modeles">+ Nouveau modèle</a>${m ? `<a class="btn primary" href="#/atelier?m=${m.id}" id="m_use">Utiliser dans l'atelier</a>` : ''}`) +
+      `<div class="grid-wide"><section class="card"><h2>Modèles importés</h2><div class="list">${list}</div><div class="assistant"><strong>Assistant Juridesk</strong> — Vos modèles restent dans votre navigateur (démo). En production, ils sont partagés avec tout le cabinet, versionnés et relus par votre juriste référent.</div></section>${editor}</div>`;
+  }
+
   function viewSignatures() {
     const items = [
       { doc: 'Mise en demeure — Nova Tech SRL', dossier: 'REC-2026-0147', mode: 'Recommandé électronique', statut: 'Signé · envoyé le 19/10/2026', cls: 'ok' },
@@ -586,15 +655,17 @@ ${a.plan ? `<h2>Article 5 — Confidentialité</h2><p><mark>Les parties s'interd
   // ---------- Routeur ----------
   function render() {
     const hash = location.hash || '#/dossiers';
-    const [, route, param] = hash.split('/');
+    const [, route0, param0] = hash.split('/');
+    const route = route0.replace(/\?.*$/, ''), param = route0.includes('?') ? route0.slice(route0.indexOf('?')) : param0;
     let html, nav = route;
     switch (route) {
       case 'dossier': html = viewDossier(param); nav = 'dossiers'; break;
       case 'nouveau': html = viewNouveau(); nav = 'dossiers'; break;
-      case 'atelier': html = viewAtelier(); break;
+      case 'atelier': { const q = (param || '').match(/^\?m=(.+)$/); if (q && allModeles().some(m => m.id === q[1])) { state.atelier.modele = q[1]; state.atelier.step = 2; history.replaceState(null, '', '#/atelier'); } html = viewAtelier(); break; }
       case 'calculateurs': html = viewCalculateurs(param); break;
       case 'signatures': html = viewSignatures(); break;
       case 'clients': html = viewClients(); break;
+      case 'modeles': html = viewModeles(param); break;
       default: html = viewDossiers(); nav = 'dossiers';
     }
     view.innerHTML = html;
@@ -650,7 +721,8 @@ ${a.plan ? `<h2>Article 5 — Confidentialité</h2><p><mark>Les parties s'interd
       on('#prev', 'click', rerender(() => { a.step = Math.max(1, a.step - 1); }));
       on('#next', 'click', rerender(() => { a.step = Math.min(5, a.step + 1); }));
       on('#langToggle', 'click', rerender(() => { a.lang = a.lang === 'fr' ? 'nl' : 'fr'; }));
-      on('#exportBtn', 'click', () => exportPdf(MODELES.find(m => m.id === a.modele).nom, $('.doc', view).innerHTML, 'doc'));
+      on('#exportBtn', 'click', () => exportPdf(findModele(a.modele).nom, $('.doc', view).innerHTML, 'doc'));
+      $$('[data-cf]', view).forEach(el => el.addEventListener('input', () => { a.custom[el.dataset.cf] = el.value; refreshDoc(); }));
       on('#dossierSel', 'change', rerender(e => { state.dossier = e.target.value; }));
       $$('input[name=modele]', view).forEach(r => r.addEventListener('change', () => { a.modele = r.value; render(); }));
       on('#signataire', 'input', e => { a.signataire = e.target.value; refreshDoc(); });
@@ -659,6 +731,33 @@ ${a.plan ? `<h2>Article 5 — Confidentialité</h2><p><mark>Les parties s'interd
       $$('[data-p]', view).forEach(el => el.addEventListener('input', () => { a.p[el.dataset.p] = el.type === 'number' ? +el.value || 0 : el.value; refreshDoc(); }));
       $$('[data-clause]', view).forEach(cb => cb.addEventListener('change', () => { a[cb.dataset.clause] = cb.checked; if (a.modele === 'med') { state.calc.indemnite = a.indemnite; state.calc.penale = a.penale; } render(); }));
       on('#signer', 'click', () => { $('#signMsg', view).textContent = 'Démo : en production, itsme s\'ouvre ici pour signer, puis le recommandé électronique est envoyé et journalisé.'; });
+    }
+
+    if (route === 'modeles') {
+      const m = CUSTOM.find(x => x.id === param);
+      const ta = $('#m_texte', view);
+      $$('[data-var]', view).forEach(b => b.addEventListener('click', () => { const t = '{{' + b.dataset.var + '}}'; const s0 = ta.selectionStart, e0 = ta.selectionEnd; ta.value = ta.value.slice(0, s0) + t + ta.value.slice(e0); ta.focus(); ta.selectionStart = ta.selectionEnd = s0 + t.length; }));
+      on('#m_file', 'change', async e => {
+        const f = e.target.files[0]; if (!f) return;
+        const msg = $('#m_msg', view);
+        if (/\.docx$/i.test(f.name)) {
+          msg.textContent = 'Lecture du fichier Word…';
+          try {
+            if (!window.mammoth) await new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js'; sc.onload = res; sc.onerror = rej; document.head.appendChild(sc); });
+            const r = await window.mammoth.extractRawText({ arrayBuffer: await f.arrayBuffer() });
+            ta.value = r.value.replace(/\n{3,}/g, '\n\n').trim(); msg.textContent = 'Texte importé. Remplacez les passages variables par des balises {{…}}.';
+          } catch (err) { msg.textContent = 'Impossible de lire ce fichier Word.'; }
+        } else { ta.value = (await f.text()).trim(); msg.textContent = 'Texte importé.'; }
+        if (!$('#m_nom', view).value) $('#m_nom', view).value = f.name.replace(/\.[^.]+$/, '');
+      });
+      on('#m_save', 'click', () => {
+        const nom = $('#m_nom', view).value.trim(), texte = ta.value.trim();
+        if (!nom || !texte) { $('#m_msg', view).textContent = 'Le nom et le texte du modèle sont obligatoires.'; return; }
+        const data = { nom, famille: $('#m_famille', view).value.trim() || 'Mes modèles', cible: $('#m_cible', view).value, texte };
+        if (m) Object.assign(m, data); else { const n = { id: 'c_' + Date.now(), ...data }; CUSTOM.push(n); save(); location.hash = '#/modeles/' + n.id; return; }
+        save(); render();
+      });
+      on('#m_del', 'click', () => { if (!confirm('Supprimer ce modèle ?')) return; const i = CUSTOM.indexOf(m); if (i >= 0) CUSTOM.splice(i, 1); if (state.atelier.modele === m.id) state.atelier.modele = 'med'; save(); location.hash = '#/modeles'; });
     }
 
     if (route === 'calculateurs') {
